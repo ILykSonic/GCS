@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Chart</title>
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+</head>
+<body>
+<div id="container" style="width:100%; height:400px;"></div>
+<script>
+    const ws = new WebSocket('ws://localhost:8080/ws');
+
+    let chart = Highcharts.chart('container', {
+        chart: {
+            type: 'line'
+        },
+        title: {
+            text: 'Data from WebSocket'
+        },
+        xAxis: {
+            title: {
+                text: 'X Axis Data'
+            }
+        },
+        yAxis: {
+            title: {
+                text: 'Y Axis Data'
+            }
+        },
+        series: [{
+            name: 'Data',
+            data: []
+        }]
+    });
+
+    ws.on('message', function(data) {
+        var str = data.toString();
+        var arr = str.split(' ');
+
+        if(arr.length >= 5) {
+            let x = parseFloat(arr[1]); // 2nd element for x-axis
+            let y = parseFloat(arr[4]); // 5th element for y-axis
+
+            chart.series[0].addPoint([x, y]);
+        } else {
+            console.log('Data received from server does not have 5 elements');
+        }
+    });
+
+</script>
+</body>
+</html>
