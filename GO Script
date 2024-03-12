@@ -1,0 +1,172 @@
+package main
+
+import (
+	"encoding/csv"
+	"fmt"
+	"github.com/gorilla/websocket" // Import the Gorilla WebSocket package
+	"github.com/tarm/serial" // Import the Tarm Serial package
+	"log"
+	"math/rand"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var upgrader = websocket.Upgrader{} // Define a WebSocket upgrader
+var conn *websocket.Conn // Define a global WebSocket connection variable
+
+// WebSocket handler function
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	var err error
+	// Upgrade the HTTP connection to a WebSocket connection
+	conn, err = upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Println("Error during connection upgradation:", err)
+		return
+	}
+}
+
+func main() {
+	http.HandleFunc("/ws", wsHandler) // Register the WebSocket handler function
+	go func() {
+		// Start the HTTP server on localhost port 8080
+		log.Fatal(http.ListenAndServe("localhost:8080", nil))
+	}()
+
+	userealdata := false // Flag to use real data or not
+	fieldNames := []string{"<TEAM ID>", "<MISSION_TIME>", "<PACKET_COUNT>", "<MODE>", "<STATE>", "<ALTITUDE>",
+		"<AIR_SPEED>", "<HS_DEPLOYED>", "<PC_DEPLOYED>", "<TEMPERATURE>", "<VOLTAGE>", "<PRESSURE>", "<GPS_TIME>",
+		"<GPS_ALTITUDE>", "<GPS_LATITUDE>", "<GPS_LONGITUDE>", "<GPS_SATS>", "<TILT_X>", "<TILT_Y>",
+		"<ROT_Z>", "<CMD_ECHO>"} // Define the field names for the CSV file
+
+	// Open the CSV file in append mode, create it if it doesn't exist
+	file, err := os.OpenFile("data114.csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer file.Close() // Ensure the file is closed when the function returns
+
+	writer := csv.NewWriter(file) // Create a new CSV writer
+	defer writer.Flush() // Ensure any buffered data is written when the function returns
+
+	// Get the file info
+	fileInfo, err := file.Stat()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// If the file is empty, write the field names to the first line
+	if fileInfo.Size() == 0 {
+		err = writer.Write(fieldNames)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
+
+	// Loop to read data and write to the CSV file
+	for i := 0; i < 10000000000000; i++ {
+		var record []string
+		if userealdata {
+			// Configure the serial port
+			c := &serial.Config{Name: "COM3", Baud: 9600}
+			// Open the serial port
+			s, err := serial.OpenPort(c)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			defer s.Close() // Ensure the serial port is closed when the function returns
+
+			message := ""
+			buf := make([]byte, 128)
+			start := time.Now()
+			for {
+				// Break the loop after 1 second
+				if time.Since(start) > time.Second {
+					break
+				}
+				// Read data from the serial port
+				n, err := s.Read(buf)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				// Append the read data to the message
+				message += string(buf[:n])
+			}
+			s.Close() // Close the serial port
+
+			// If the last character of the message is '2', remove it
+			if len(message) > 0 && message[len(message)-1] == '2' {
+				message = message[:len(message)-1]
+			}
+
+			// If the message is long enough and starts with "2078"
+			if len(message) >= 98 {
+				message = strings.TrimSpace(message)
+				if strings.HasPrefix(message, "2078") {
+					// Split the message into a record and write it to the CSV file
+					record = strings.Split(message, ",")
+					err = writer.Write(record)
+					if err != nil {
+						fmt.Println(err)
+						return
+					}
+					fmt.Println(record) // Print the record
+				}
+			}
+		} else {
+			// Create a record with random data
+			record = []string{
+				"2078", // Team ID
+				fmt.Sprintf("%02d:%02d:%02d.%03d", i/3600, (i%3600)/60, i%60, i%1000), // Mission time
+				strconv.Itoa(i), // Packet count
+				"F", // Mode
+				"ASCENSION", // State
+				fmt.Sprintf("%.2f", rand.Float64()*10-5), // Altitude
+				fmt.Sprintf("%.2f", rand.Float64()*60+50), // Air speed
+				"N", // HS Deployed
+				"N", // PC Deployed
+				fmt.Sprintf("%.2f", rand.Float64()*50+25), // Temperature
+				fmt.Sprintf("%.2f", rand.Float64()*7+6), // Voltage
+				fmt.Sprintf("%.2f", rand.Float64()*1000+23), // Pressure
+				fmt.Sprintf("%02d:%02d:%02d.%03d", i/3600, (i%3600)/60, i%60, i%1000), // GPS Time
+				fmt.Sprintf("%.2f", rand.Float64()*60+23), // GPS Altitude
+				fmt.Sprintf("%.2f", rand.Float64()*55+11), // GPS Latitude
+				fmt.Sprintf("%.2f", rand.Float64()*54+6), // GPS Longitude
+				fmt.Sprintf("%.d", rand.Intn(3)+1), // GPS Sats
+				fmt.Sprintf("%.2f", rand.Float64()*150+30), // Tilt X
+				fmt.Sprintf("%.2f", rand.Float64()*140+40), // Tilt Y
+				fmt.Sprintf("%.2f", rand.Float64()*40+22), // Rot Z
+				"ACT,LED", // CMD Echo
+			}
+			// Write the record to the CSV file
+			err = writer.Write(record)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			// If the WebSocket connection is established, send the record as JSON
+			if conn != nil {
+				err = conn.WriteJSON(record)
+				if err != nil {
+					fmt.Println("Error during writing data to WebSocket:", err)
+					break
+				}
+			}
+		}
+
+		// Flush the CSV writer to write any buffered data to the file
+		writer.Flush()
+		// Print the record to the console
+		fmt.Println(record)
+		// Sleep for one second before the next iteration
+		time.Sleep(time.Second)
+	}
+}
